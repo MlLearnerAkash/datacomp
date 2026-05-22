@@ -133,7 +133,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--enable_wandb",
         action="store_true",
-        default=False,
+        default=True,
         help="Whether to enable wandb logging (default False)",
     )
     parser.add_argument(
