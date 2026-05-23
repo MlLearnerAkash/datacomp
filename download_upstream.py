@@ -6,9 +6,11 @@ from pathlib import Path
 
 import img2dataset
 from cloudpathlib import CloudPath
-from huggingface_hub import snapshot_download
+from huggingface_hub import snapshot_download, list_repo_files, hf_hub_download
 
 from scale_configs import available_scales
+
+os.environ["HF_HUB_DISABLE_PROGRESS_BARS"] = "0"
 
 
 def path_or_cloudpath(s):
@@ -65,6 +67,12 @@ if __name__ == "__main__":
         help="If true, force re-download of the metadata files.",
         action="store_true",
         default=False,
+    )
+    parser.add_argument(
+        "--resume_metadata",
+        action="store_true",
+        default=False,
+        help="Resume broken metadata",
     )
     parser.add_argument(
         "--skip_bbox_blurring",
@@ -155,36 +163,90 @@ if __name__ == "__main__":
     metadata_dir = args.metadata_dir
     if metadata_dir is None:
         metadata_dir = args.data_dir / "metadata"
+    # Determine which parquet files already exist locally.
+    existing_parquets = set()
+    if metadata_dir.exists():
+        for f in metadata_dir.glob("*.parquet"):
+            if f.stat().st_size > 0:
+                existing_parquets.add(f.name)
 
-    # Download the metadata files if needed.
-    if args.overwrite_metadata or not metadata_dir.exists():
-        if metadata_dir.exists():
+    should_download = args.overwrite_metadata or len(existing_parquets) == 0
+    should_resume = getattr(args, "resume_metadata", False) and len(existing_parquets) > 0
+
+    if should_download or should_resume:
+        if metadata_dir.exists() and args.overwrite_metadata:
             print(f"Cleaning up {metadata_dir}")
             shutil.rmtree(metadata_dir)
-        metadata_dir.mkdir(parents=True)
+            metadata_dir.mkdir(parents=True)
+        elif not metadata_dir.exists():
+            metadata_dir.mkdir(parents=True)
 
-        print(f"Downloading metadata to {metadata_dir}...")
+        if should_resume and len(existing_parquets) > 0:
+            # Only download parquet files that are not already present locally.
+            print(f"Resuming: checking for missing parquet files among {len(existing_parquets)} existing...")
+            remote_files = list_repo_files(hf_repo, repo_type="dataset")
+            missing_parquets = [
+                f for f in remote_files
+                if f.endswith(".parquet") and Path(f).name not in existing_parquets
+            ]
+            if not missing_parquets:
+                print("All parquet files already present locally. Skipping metadata download.")
+            else:
+                print(f"Downloading {len(missing_parquets)} missing parquet file(s)...")
+                for f in missing_parquets:
+                    hf_hub_download(
+                        repo_id=hf_repo,
+                        filename=f,
+                        local_dir=metadata_dir,
+                        local_dir_use_symlinks=False,
+                        repo_type="dataset",
+                        resume_download=True,
+                    )
 
-        cache_dir = metadata_dir.parent / f"hf"
-        hf_snapshot_args = dict(
-            repo_id=hf_repo,
-            allow_patterns=f"*.parquet",
-            local_dir=metadata_dir,
-            cache_dir=cache_dir,
-            local_dir_use_symlinks=False,
-            repo_type="dataset",
-        )
+            # Also download missing npz files if requested.
+            if args.download_npz:
+                existing_npzs = {f.name for f in metadata_dir.glob("*.npz") if f.stat().st_size > 0}
+                missing_npzs = [
+                    f for f in remote_files
+                    if f.endswith(".npz") and Path(f).name not in existing_npzs
+                ]
+                if missing_npzs:
+                    print(f"Downloading {len(missing_npzs)} missing npz file(s)...")
+                    for f in missing_npzs:
+                        hf_hub_download(
+                            repo_id=hf_repo,
+                            filename=f,
+                            local_dir=metadata_dir,
+                            local_dir_use_symlinks=False,
+                            repo_type="dataset",
+                            resume_download=True,
+                        )
+        else:
+            print(f"Downloading metadata to {metadata_dir}...")
+            cache_dir = metadata_dir.parent / "hf"
+            hf_snapshot_args = dict(
+                repo_id=hf_repo,
+                allow_patterns=f"*.parquet",
+                local_dir=metadata_dir,
+                cache_dir=cache_dir,
+                local_dir_use_symlinks=False,
+                repo_type="dataset",
+                resume_download=False,
+            )
 
-        if args.scale == "xlarge":
-            hf_snapshot_args["allow_patterns"] = f"*/*.parquet"
+            if args.scale == "xlarge":
+                hf_snapshot_args["allow_patterns"] = f"*/*.parquet"
 
-        snapshot_download(**hf_snapshot_args)
-        if args.download_npz:
-            hf_snapshot_args["allow_patterns"] = hf_snapshot_args[
-                "allow_patterns"
-            ].replace(".parquet", ".npz")
-            print("\nDownloading npz files")
             snapshot_download(**hf_snapshot_args)
+
+            if args.download_npz:
+                hf_snapshot_args["allow_patterns"] = hf_snapshot_args[
+                    "allow_patterns"
+                ].replace(".parquet", ".npz")
+                print("\nDownloading npz files")
+                snapshot_download(**hf_snapshot_args)
+
+            cleanup_dir(cache_dir)
 
         # Flatten directory structure in case of xlarge
         if args.scale == "xlarge":
@@ -198,8 +260,6 @@ if __name__ == "__main__":
             empty_dirs = list(metadata_dir.glob("part_*"))
             for empty_dir in empty_dirs:
                 empty_dir.rmdir()
-
-        cleanup_dir(cache_dir)
 
         print("Done downloading metadata.")
     else:
