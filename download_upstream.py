@@ -57,6 +57,12 @@ if __name__ == "__main__":
         default=False,
     )
     parser.add_argument(
+        "--skip_metadata",
+        help="If true, skip downloading metadata (parquet/npz files).",
+        action="store_true",
+        default=False,
+    )
+    parser.add_argument(
         "--skip_shards",
         help="If true, only download metadata.",
         action="store_true",
@@ -132,6 +138,14 @@ if __name__ == "__main__":
         help="Output format used by img2dataset when downloading images.",
     )
     parser.add_argument(
+        "--max_parquet_files",
+        type=int,
+        required=False,
+        default=None,
+        help="Maximum number of parquet files to download images from. "
+        "If not set, all parquet files are used.",
+    )
+    parser.add_argument(
         "--retries",
         type=int,
         required=False,
@@ -173,46 +187,28 @@ if __name__ == "__main__":
     should_download = args.overwrite_metadata or len(existing_parquets) == 0
     should_resume = getattr(args, "resume_metadata", False) and len(existing_parquets) > 0
 
-    if should_download or should_resume:
-        if metadata_dir.exists() and args.overwrite_metadata:
-            print(f"Cleaning up {metadata_dir}")
-            shutil.rmtree(metadata_dir)
-            metadata_dir.mkdir(parents=True)
-        elif not metadata_dir.exists():
-            metadata_dir.mkdir(parents=True)
+    if not args.skip_metadata:
+        if should_download or should_resume:
+            if metadata_dir.exists() and args.overwrite_metadata:
+                print(f"Cleaning up {metadata_dir}")
+                shutil.rmtree(metadata_dir)
+                metadata_dir.mkdir(parents=True)
+            elif not metadata_dir.exists():
+                metadata_dir.mkdir(parents=True)
 
-        if should_resume and len(existing_parquets) > 0:
-            # Only download parquet files that are not already present locally.
-            print(f"Resuming: checking for missing parquet files among {len(existing_parquets)} existing...")
-            remote_files = list_repo_files(hf_repo, repo_type="dataset")
-            missing_parquets = [
-                f for f in remote_files
-                if f.endswith(".parquet") and Path(f).name not in existing_parquets
-            ]
-            if not missing_parquets:
-                print("All parquet files already present locally. Skipping metadata download.")
-            else:
-                print(f"Downloading {len(missing_parquets)} missing parquet file(s)...")
-                for f in missing_parquets:
-                    hf_hub_download(
-                        repo_id=hf_repo,
-                        filename=f,
-                        local_dir=metadata_dir,
-                        local_dir_use_symlinks=False,
-                        repo_type="dataset",
-                        resume_download=True,
-                    )
-
-            # Also download missing npz files if requested.
-            if args.download_npz:
-                existing_npzs = {f.name for f in metadata_dir.glob("*.npz") if f.stat().st_size > 0}
-                missing_npzs = [
+            if should_resume and len(existing_parquets) > 0:
+                # Only download parquet files that are not already present locally.
+                print(f"Resuming: checking for missing parquet files among {len(existing_parquets)} existing...")
+                remote_files = list_repo_files(hf_repo, repo_type="dataset")
+                missing_parquets = [
                     f for f in remote_files
-                    if f.endswith(".npz") and Path(f).name not in existing_npzs
+                    if f.endswith(".parquet") and Path(f).name not in existing_parquets
                 ]
-                if missing_npzs:
-                    print(f"Downloading {len(missing_npzs)} missing npz file(s)...")
-                    for f in missing_npzs:
+                if not missing_parquets:
+                    print("All parquet files already present locally. Skipping metadata download.")
+                else:
+                    print(f"Downloading {len(missing_parquets)} missing parquet file(s)...")
+                    for f in missing_parquets:
                         hf_hub_download(
                             repo_id=hf_repo,
                             filename=f,
@@ -221,51 +217,72 @@ if __name__ == "__main__":
                             repo_type="dataset",
                             resume_download=True,
                         )
-        else:
-            print(f"Downloading metadata to {metadata_dir}...")
-            cache_dir = metadata_dir.parent / "hf"
-            hf_snapshot_args = dict(
-                repo_id=hf_repo,
-                allow_patterns=f"*.parquet",
-                local_dir=metadata_dir,
-                cache_dir=cache_dir,
-                local_dir_use_symlinks=False,
-                repo_type="dataset",
-                resume_download=False,
-            )
 
-            if args.scale == "xlarge":
-                hf_snapshot_args["allow_patterns"] = f"*/*.parquet"
+                # Also download missing npz files if requested.
+                if args.download_npz:
+                    existing_npzs = {f.name for f in metadata_dir.glob("*.npz") if f.stat().st_size > 0}
+                    missing_npzs = [
+                        f for f in remote_files
+                        if f.endswith(".npz") and Path(f).name not in existing_npzs
+                    ]
+                    if missing_npzs:
+                        print(f"Downloading {len(missing_npzs)} missing npz file(s)...")
+                        for f in missing_npzs:
+                            hf_hub_download(
+                                repo_id=hf_repo,
+                                filename=f,
+                                local_dir=metadata_dir,
+                                local_dir_use_symlinks=False,
+                                repo_type="dataset",
+                                resume_download=True,
+                            )
+            else:
+                print(f"Downloading metadata to {metadata_dir}...")
+                cache_dir = metadata_dir.parent / "hf"
+                hf_snapshot_args = dict(
+                    repo_id=hf_repo,
+                    allow_patterns=f"*.parquet",
+                    local_dir=metadata_dir,
+                    cache_dir=cache_dir,
+                    local_dir_use_symlinks=False,
+                    repo_type="dataset",
+                    resume_download=False,
+                )
 
-            snapshot_download(**hf_snapshot_args)
+                if args.scale == "xlarge":
+                    hf_snapshot_args["allow_patterns"] = f"*/*.parquet"
 
-            if args.download_npz:
-                hf_snapshot_args["allow_patterns"] = hf_snapshot_args[
-                    "allow_patterns"
-                ].replace(".parquet", ".npz")
-                print("\nDownloading npz files")
                 snapshot_download(**hf_snapshot_args)
 
-            cleanup_dir(cache_dir)
+                if args.download_npz:
+                    hf_snapshot_args["allow_patterns"] = hf_snapshot_args[
+                        "allow_patterns"
+                    ].replace(".parquet", ".npz")
+                    print("\nDownloading npz files")
+                    snapshot_download(**hf_snapshot_args)
 
-        # Flatten directory structure in case of xlarge
-        if args.scale == "xlarge":
-            filenames = list(metadata_dir.rglob("*.parquet")) + list(
-                metadata_dir.rglob("*.npz")
+                cleanup_dir(cache_dir)
+
+            # Flatten directory structure in case of xlarge
+            if args.scale == "xlarge":
+                filenames = list(metadata_dir.rglob("*.parquet")) + list(
+                    metadata_dir.rglob("*.npz")
+                )
+                for filename in filenames:
+                    basename = filename.name
+                    filename.replace(metadata_dir / basename)
+
+                empty_dirs = list(metadata_dir.glob("part_*"))
+                for empty_dir in empty_dirs:
+                    empty_dir.rmdir()
+
+            print("Done downloading metadata.")
+        else:
+            print(
+                f"Skipping download of metadata because {metadata_dir} exists. Use --overwrite_metadata to force re-downloading."
             )
-            for filename in filenames:
-                basename = filename.name
-                filename.replace(metadata_dir / basename)
-
-            empty_dirs = list(metadata_dir.glob("part_*"))
-            for empty_dir in empty_dirs:
-                empty_dir.rmdir()
-
-        print("Done downloading metadata.")
     else:
-        print(
-            f"Skipping download of metadata because {metadata_dir} exists. Use --overwrite_metadata to force re-downloading."
-        )
+        print("Skipping metadata download (--skip_metadata set).")
 
     if not args.skip_shards:
         # Download images.
@@ -275,27 +292,57 @@ if __name__ == "__main__":
 
         bbox_col = None if args.skip_bbox_blurring else "face_bboxes"
 
-        img2dataset.download(
-            url_list=str(metadata_dir),
-            image_size=args.image_size,
-            output_folder=str(shard_dir),
-            processes_count=args.processes_count,
-            thread_count=args.thread_count,
-            resize_mode=args.resize_mode,
-            resize_only_if_bigger=not args.no_resize_only_if_bigger,
-            encode_format=args.encode_format,
-            output_format=args.output_format,
-            input_format="parquet",
-            url_col="url",
-            caption_col="text",
-            bbox_col=bbox_col,
-            save_additional_columns=["uid"],
-            number_sample_per_shard=10000,
-            oom_shard_count=8,
-            retries=args.retries,
-            enable_wandb=args.enable_wandb,
-            wandb_project=args.wandb_project,
-        )
+        # Determine which metadata directory to use for img2dataset.
+        # If max_parquet_files is set, create a temp dir with only that many parquet files.
+        url_list_dir = metadata_dir
+        temp_metadata_dir = None
+        skip_image_download = False
+        if args.max_parquet_files is not None:
+            import tempfile
+            parquet_files = sorted(metadata_dir.glob("*.parquet"))
+            if not parquet_files:
+                print("No parquet files found in metadata directory. Did you forget to download metadata?")
+                skip_image_download = True
+            else:
+                selected = parquet_files[: args.max_parquet_files]
+                print(
+                    f"Limiting to {len(selected)} of {len(parquet_files)} parquet files "
+                    f"(max_parquet_files={args.max_parquet_files})."
+                )
+                temp_metadata_dir = Path(tempfile.mkdtemp(prefix="datacomp_metadata_"))
+                for pf in selected:
+                    shutil.copy(pf, temp_metadata_dir / pf.name)
+                url_list_dir = temp_metadata_dir
+        elif not metadata_dir.exists() or not any(metadata_dir.glob("*.parquet")):
+            print("No parquet files found in metadata directory. Did you forget to download metadata?")
+            skip_image_download = True
+
+        if not skip_image_download:
+            img2dataset.download(
+                url_list=str(url_list_dir),
+                image_size=args.image_size,
+                output_folder=str(shard_dir),
+                processes_count=args.processes_count,
+                thread_count=args.thread_count,
+                resize_mode=args.resize_mode,
+                resize_only_if_bigger=not args.no_resize_only_if_bigger,
+                encode_format=args.encode_format,
+                output_format=args.output_format,
+                input_format="parquet",
+                url_col="url",
+                caption_col="text",
+                bbox_col=bbox_col,
+                save_additional_columns=["uid"],
+                number_sample_per_shard=10000,
+                oom_shard_count=8,
+                retries=args.retries,
+                enable_wandb=args.enable_wandb,
+                wandb_project=args.wandb_project,
+            )
+
+            # Clean up temporary metadata directory if one was created.
+            if temp_metadata_dir is not None:
+                cleanup_dir(temp_metadata_dir)
     else:
         print(f"Skipping image data download.")
 

@@ -21,8 +21,10 @@ python download_upstream.py \
     --scale datacomp_1b \
     --data_dir /scratch/akash/ \
     --skip_bbox_blurring \
-    --skip_shards \
-    --resume_metadata
+    --skip_metadata \
+    --max_parquet_files 1
+    # --skip_shards \
+    # --resume_metadata
 echo "parquets downloaded."
 
 # Activate conda environment /home2/akash.manna/miniconda3/envs/datacomp

@@ -31,7 +31,7 @@ def process_single_parquet(filepath: str, columns: list[str]) -> pd.DataFrame:
 
     # Save CSV with the same base name as the parquet file
     csv_path = os.path.splitext(filepath)[0] + ".csv"
-    filtered.to_csv(csv_path, index=False)
+    filtered.to_csv(csv_path, index=False, escapechar='\\')
     return filtered
 
 def analyze_csvs(csv_dir: str, parquet_dir: str) -> dict:
@@ -163,7 +163,7 @@ if __name__ == "__main__":
 
     for i, fpath in enumerate(parquet_files):
         process_single_parquet(fpath, columns=[])
-        # if i>1:
+        # if i>100:
         #     break
     print("CSV file generated.")
 
