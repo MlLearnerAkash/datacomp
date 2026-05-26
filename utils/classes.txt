@@ -1,0 +1,49 @@
+car
+truck
+SUV
+bus
+motorcycle
+bicycle
+van
+sedan
+delivery truck
+pickup truck
+hatchback
+coupe
+semi-truck
+ambulance
+road
+highway
+street
+sidewalk
+crosswalk
+lane
+intersection
+overpass
+freeway
+ramp
+guardrail
+pavement
+zembra cross
+traffic light
+stop sign
+yield sign
+speed limit
+traffic cone
+road signs
+street sign
+bollard
+barricade
+road marking
+urban
+suburban
+rural
+city street
+daytime
+nighttime
+rainy
+sunny
+foggy
+snowy
+buildings
+sky
