@@ -6,7 +6,7 @@ from pathlib import Path
 
 import img2dataset
 from cloudpathlib import CloudPath
-from huggingface_hub import snapshot_download, list_repo_files, hf_hub_download
+from huggingface_hub import list_repo_files, hf_hub_download
 
 from scale_configs import available_scales
 
@@ -48,37 +48,7 @@ if __name__ == "__main__":
         "--metadata_dir",
         type=path_or_cloudpath,
         default=None,
-        help="Path to directory where the metadata will be stored. If not set, infer from data_dir.",
-    )
-    parser.add_argument(
-        "--download_npz",
-        help="If true, also download npz files.",
-        action="store_true",
-        default=False,
-    )
-    parser.add_argument(
-        "--skip_metadata",
-        help="If true, skip downloading metadata (parquet/npz files).",
-        action="store_true",
-        default=False,
-    )
-    parser.add_argument(
-        "--skip_shards",
-        help="If true, only download metadata.",
-        action="store_true",
-        default=False,
-    )
-    parser.add_argument(
-        "--overwrite_metadata",
-        help="If true, force re-download of the metadata files.",
-        action="store_true",
-        default=False,
-    )
-    parser.add_argument(
-        "--resume_metadata",
-        action="store_true",
-        default=False,
-        help="Resume broken metadata",
+        help="Path to directory where the metadata (parquet files) is stored. If not set, infer from data_dir.",
     )
     parser.add_argument(
         "--skip_bbox_blurring",
@@ -165,6 +135,27 @@ if __name__ == "__main__":
         default="datacomp",
         help="Name of W&B project used (default datacomp)",
     )
+    parser.add_argument(
+        "--skip_npz",
+        action="store_true",
+        default= False
+    )
+    parser.add_argument(
+        "--skip_metadata",
+        action="store_true",
+        default= False
+    )
+    parser.add_argument(
+        "--skip_shards",
+        action="store_true",
+        default= False
+    )
+    parser.add_argument(
+        "--overwrite_metadata",
+        action="store_true",
+        default= False
+    )
+    
 
     args = parser.parse_args()
 
@@ -218,63 +209,40 @@ if __name__ == "__main__":
                             resume_download=True,
                         )
 
-                # Also download missing npz files if requested.
-                if args.download_npz:
-                    existing_npzs = {f.name for f in metadata_dir.glob("*.npz") if f.stat().st_size > 0}
-                    missing_npzs = [
-                        f for f in remote_files
-                        if f.endswith(".npz") and Path(f).name not in existing_npzs
-                    ]
-                    if missing_npzs:
-                        print(f"Downloading {len(missing_npzs)} missing npz file(s)...")
-                        for f in missing_npzs:
-                            hf_hub_download(
-                                repo_id=hf_repo,
-                                filename=f,
-                                local_dir=metadata_dir,
-                                local_dir_use_symlinks=False,
-                                repo_type="dataset",
-                                resume_download=True,
-                            )
-            else:
-                print(f"Downloading metadata to {metadata_dir}...")
-                cache_dir = metadata_dir.parent / "hf"
-                hf_snapshot_args = dict(
-                    repo_id=hf_repo,
-                    allow_patterns=f"*.parquet",
-                    local_dir=metadata_dir,
-                    cache_dir=cache_dir,
-                    local_dir_use_symlinks=False,
-                    repo_type="dataset",
-                    resume_download=False,
-                )
 
-                if args.scale == "xlarge":
-                    hf_snapshot_args["allow_patterns"] = f"*/*.parquet"
+    if not args.skip_npz:
+        cache_dir = metadata_dir.parent / "hf"
+        print("\nDownloading npz files")
+        remote_files = list_repo_files(hf_repo, repo_type="dataset")
+        npz_files = [f for f in remote_files if f.endswith(".npz")]
+        if not npz_files:
+            print("No npz files found.")
+        else:
+            f = npz_files[0] #NOTE: downlod signle file
+            print(f"Downloading {f}")
+            hf_hub_download(
+                repo_id=hf_repo,
+                filename=f,
+                local_dir=metadata_dir,
+                cache_dir=cache_dir,
+                local_dir_use_symlinks=False,
+                repo_type="dataset",
+                resume_download=True,
+            )
+        cleanup_dir(cache_dir)
 
-                snapshot_download(**hf_snapshot_args)
+    # Flatten directory structure in case of xlarge
+    if args.scale == "xlarge":
+        filenames = list(metadata_dir.rglob("*.parquet")) + list(
+            metadata_dir.rglob("*.npz")
+        )
+        for filename in filenames:
+            basename = filename.name
+            filename.replace(metadata_dir / basename)
 
-                if args.download_npz:
-                    hf_snapshot_args["allow_patterns"] = hf_snapshot_args[
-                        "allow_patterns"
-                    ].replace(".parquet", ".npz")
-                    print("\nDownloading npz files")
-                    snapshot_download(**hf_snapshot_args)
-
-                cleanup_dir(cache_dir)
-
-            # Flatten directory structure in case of xlarge
-            if args.scale == "xlarge":
-                filenames = list(metadata_dir.rglob("*.parquet")) + list(
-                    metadata_dir.rglob("*.npz")
-                )
-                for filename in filenames:
-                    basename = filename.name
-                    filename.replace(metadata_dir / basename)
-
-                empty_dirs = list(metadata_dir.glob("part_*"))
-                for empty_dir in empty_dirs:
-                    empty_dir.rmdir()
+        empty_dirs = list(metadata_dir.glob("part_*"))
+        for empty_dir in empty_dirs:
+            empty_dir.rmdir()
 
             print("Done downloading metadata.")
         else:
