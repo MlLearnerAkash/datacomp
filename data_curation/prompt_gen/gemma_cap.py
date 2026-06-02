@@ -14,17 +14,20 @@ logger = logging.getLogger("Captioner")
 # Function to load PaliGemma model and processor
 def load_pali_gemma_model(args):
     model_id = args.model_path
-    model = PaliGemmaForConditionalGeneration.from_pretrained(model_id).to(torch.float32).eval()
+    model = PaliGemmaForConditionalGeneration.from_pretrained(model_id, device_map="auto").to(torch.float32).eval()
     processor = AutoProcessor.from_pretrained(model_id)
     return model, processor
 
-def generate_caption_with_pali_gemma(image_path, processor, model, query_strings, do_sample=False, temperature=0.7):
+def generate_caption_with_pali_gemma(image_path, processor, model, query_strings, do_sample=False, temperature=0.3):
     if image_path.startswith("http://") or image_path.startswith("https://"):
         image = Image.open(requests.get(image_path, stream=True).raw)
     else:
         image = Image.open(image_path)
+    if 'A' in image.mode:
+        image= image.convert("RGB")
     #NOTE: it can take mupliple query strings, for dev.
     model_inputs = processor(text=query_strings, images=[image] * len(query_strings), return_tensors="pt")
+    model_inputs = {k: v.to(model.device) for k, v in model_inputs.items()}
     input_len = model_inputs["input_ids"].shape[-1]
 
     with torch.inference_mode():
@@ -34,7 +37,7 @@ def generate_caption_with_pali_gemma(image_path, processor, model, query_strings
             do_sample=do_sample, 
             temperature=temperature, 
             top_p=0.9, 
-            top_k=50
+            top_k=10
         )
         outputs = []
         for _generation in generation:
@@ -43,16 +46,20 @@ def generate_caption_with_pali_gemma(image_path, processor, model, query_strings
     return outputs
 
 def process_image(args, image_path, alt_text, model, processor):
-    query_string=(
+    if alt_text:
+        # query_string = f"The image contain the alt_text: {alt_text} as a guide to ground your response. Please be concise. <image>caption en\n"
+        query_string=(
     f"The image presented came from a web"
     f"and had the alt-text: {alt_text}. Please describe what is in the image "
     f"using the alt-text and the page title as a guide to ground your response. "
     f"For example, if the alt-text contains a specific brand name, use that brand "
     f"name in your output. Please be descriptive but concise. DO NOT make things up. "
     f"If you can't tell something with certainty in the image, simply don't say "
-    f"anything about it.\ncaption en"
+    f"anything about it.\n<image>caption en"
     )
-    result= generate_caption_with_pali_gemma(image_path, processor, model, query_string)
+    else:
+        query_string = f"<image>caption en"
+    result= generate_caption_with_pali_gemma(image_path, processor, model, [query_string])
     return result
 
 def process_directory(args, image_dir, output_parquet, model, processor):
