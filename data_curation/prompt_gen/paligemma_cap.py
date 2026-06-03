@@ -96,7 +96,7 @@ def process_directory(args, image_dir, output_parquet, model, processor):
                 records.append({
                     "filename": filename,
                     "caption": result,
-                    "image": image_bytes
+                    # "image": image_bytes
                 })
 
             except Exception as e:
